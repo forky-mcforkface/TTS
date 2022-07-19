@@ -74,7 +74,7 @@ def get_module_weights_sum(mdl: nn.Module):
     return dict_sums
 
 
-def load_audio(file_path):
+def load_audio(file_path, sample_rate=None):
     """Load the audio file normalized in [-1, 1]
 
     Return Shapes:
@@ -84,6 +84,13 @@ def load_audio(file_path):
         file_path,
     )
     assert (x > 1).sum() + (x < -1).sum() == 0
+    if sample_rate:
+        x = torchaudio.functional.resample(
+                x,
+                orig_freq=sr,
+                new_freq=sample_rate,
+            )
+        sr = sample_rate
     return x, sr
 
 
@@ -250,6 +257,7 @@ class VitsAudioConfig(Coqpit):
     mel_fmax: int = None
     pitch_fmax: float = 640.0
 
+
 ##############################
 # DATASET
 ##############################
@@ -264,7 +272,11 @@ def get_attribute_balancer_weights(items: list, attr_name: str):
     weight_attr = 1.0 / attr_count
     dataset_samples_weight = np.array([weight_attr[l] for l in attr_values])
     dataset_samples_weight = dataset_samples_weight / np.linalg.norm(dataset_samples_weight)
-    return torch.from_numpy(dataset_samples_weight).float(), unique_attr_names, np.unique(dataset_samples_weight).tolist()
+    return (
+        torch.from_numpy(dataset_samples_weight).float(),
+        unique_attr_names,
+        np.unique(dataset_samples_weight).tolist(),
+    )
 
 
 class VitsF0Dataset(F0Dataset):
@@ -278,7 +290,9 @@ class VitsF0Dataset(F0Dataset):
         cache_path: str = None,
         precompute_num_workers=0,
         normalize_f0=True,
+        sample_rate=None
     ):
+        self.sample_rate = sample_rate
         super().__init__(
             samples=samples,
             audio_config=audio_config,
@@ -289,8 +303,8 @@ class VitsF0Dataset(F0Dataset):
         )
 
     @staticmethod
-    def _compute_and_save_pitch(audio_config, wav_file, pitch_file=None):
-        wav, _ = load_audio(wav_file)
+    def _compute_and_save_pitch(audio_config, wav_file, pitch_file=None, sample_rate=None):
+        wav, _ = load_audio(wav_file, sample_rate=sample_rate)
         f0 = compute_f0(
             x=wav.numpy()[0],
             sample_rate=audio_config.sample_rate,
@@ -311,11 +325,19 @@ class VitsF0Dataset(F0Dataset):
         pitch_file = self.create_pitch_file_path(wav_file, self.cache_path)
         if not os.path.exists(pitch_file):
             pitch = self._compute_and_save_pitch(
-                audio_config=self.audio_config, wav_file=wav_file, pitch_file=pitch_file
+                audio_config=self.audio_config, wav_file=wav_file, pitch_file=pitch_file, sample_rate=self.sample_rate
             )
         else:
             pitch = np.load(pitch_file)
         return pitch.astype(np.float32)
+
+    def __getitem__(self, idx):
+        item = self.samples[idx]
+        f0 = self.compute_or_load(item["audio_file"])
+        if self.normalize_f0:
+            assert self.mean is not None and self.std is not None, " [!] Mean and STD is not available"
+            f0 = self.normalize(f0)
+        return {"audio_file": item["audio_file"], "f0": f0}
 
 
 class VitsDataset(TTSDataset):
@@ -336,6 +358,7 @@ class VitsDataset(TTSDataset):
                 samples=self.samples,
                 cache_path=kwargs["f0_cache_path"],
                 precompute_num_workers=kwargs["precompute_num_workers"],
+                sample_rate=self.encoder_sample_rate,
             )
 
         if self.attn_prior_cache_path is not None:
@@ -2219,10 +2242,11 @@ class Vits(BaseTTS):
                     attn_priors_np[i]
                 )
 
+        # compute energy
         batch["energy"] = None
         if self.args.use_energy_predictor:
             batch["energy"] = wav_to_energy(  # [B, 1, T_max2]
-                batch["waveform"],
+                wav,
                 hop_length=ac.hop_length,
                 win_length=ac.win_length,
                 n_fft=ac.fft_size,
@@ -2283,7 +2307,7 @@ class Vits(BaseTTS):
                 verbose=verbose,
                 tokenizer=self.tokenizer,
                 start_by_longest=config.start_by_longest,
-                encoder_sample_rate=config.model_args.encoder_sample_rate
+                encoder_sample_rate=config.model_args.encoder_sample_rate,
             )
 
             # wait all the DDP process to be ready
