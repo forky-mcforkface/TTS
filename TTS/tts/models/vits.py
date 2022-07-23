@@ -263,15 +263,19 @@ class VitsAudioConfig(Coqpit):
 ##############################
 
 
-def get_attribute_balancer_weights(items: list, attr_name: str):
-    """Create balancer weight for torch WeightedSampler"""
-    attr_names = np.array([item[attr_name] for item in items])
-    unique_attr_names = np.unique(attr_names).tolist()
-    attr_values = [unique_attr_names.index(l) for l in attr_names]
-    attr_count = np.array([len(np.where(attr_names == l)[0]) for l in unique_attr_names])
+def get_attribute_balancer_weights(items: list, attr_name: str, multi_dict: dict = None):
+    """Create inverse frequency weights for balancing the dataset.
+    Use `multi_dict` to scale relative weights."""
+    attr_names_samples = np.array([item[attr_name] for item in items])
+    unique_attr_names = np.unique(attr_names_samples).tolist()
+    attr_idx = [unique_attr_names.index(l) for l in attr_names_samples]
+    attr_count = np.array([len(np.where(attr_names_samples == l)[0]) for l in unique_attr_names])
     weight_attr = 1.0 / attr_count
-    dataset_samples_weight = np.array([weight_attr[l] for l in attr_values])
+    dataset_samples_weight = np.array([weight_attr[l] for l in attr_idx])
     dataset_samples_weight = dataset_samples_weight / np.linalg.norm(dataset_samples_weight)
+    if multi_dict is not None:
+        multiplier_samples = np.array([multi_dict.get(item[attr_name], 1.0) for item in items])
+        dataset_samples_weight *= multiplier_samples
     return (
         torch.from_numpy(dataset_samples_weight).float(),
         unique_attr_names,
@@ -2258,8 +2262,10 @@ class Vits(BaseTTS):
         if getattr(config, "use_weighted_sampler", False):
             for attr_name, alpha in config.attrs_for_weighted_sampler.items():
                 print(f" > Using weighted sampler for attribute '{attr_name}' with alpha '{alpha}'")
+                multi_dict = config.weighted_sampler_multipliers.get(attr_name, None)
+                print(multi_dict)
                 weights, attr_names, attr_weights = get_attribute_balancer_weights(
-                    attr_name=attr_name, items=data_items
+                    attr_name=attr_name, items=data_items, multi_dict=multi_dict
                 )
                 weights = weights * alpha
                 print(f" > Attribute weights for '{attr_names}' \n | > {attr_weights}")
