@@ -2260,7 +2260,7 @@ class Vits(BaseTTS):
         weights = None
         data_items = dataset.samples
         if getattr(config, "use_weighted_sampler", False):
-            for attr_name, alpha in config.attrs_for_weighted_sampler.items():
+            for attr_name, alpha in config.weighted_sampler_attrs.items():
                 print(f" > Using weighted sampler for attribute '{attr_name}' with alpha '{alpha}'")
                 multi_dict = config.weighted_sampler_multipliers.get(attr_name, None)
                 print(multi_dict)
