@@ -21,15 +21,16 @@ from torch.utils.data.sampler import WeightedRandomSampler
 from trainer.trainer_utils import get_optimizer, get_scheduler
 from trainer.torch import DistributedSampler, DistributedSamplerWrapper
 
+from TTS.utils.io import load_fsspec
 from TTS.tts.configs.shared_configs import CharactersConfig
 from TTS.tts.datasets.dataset import F0Dataset, TTSDataset, _parse_sample
 from TTS.tts.layers.generic.duration_predictor_lstm import BottleneckLayerLayer, DurationPredictorLSTM
-from TTS.tts.layers.glow_tts.duration_predictor import DurationPredictor
 from TTS.tts.layers.vits.discriminator import VitsDiscriminator
 from TTS.tts.layers.vits.networks import ContextEncoder, PosteriorEncoder, ResidualCouplingBlocks, TextEncoder
 from TTS.tts.layers.vits.stochastic_duration_predictor import StochasticDurationPredictor
 from TTS.tts.utils.emotions import EmotionManager
 from TTS.tts.models.base_tts import BaseTTS
+from TTS.utils.samplers import BucketBatchSampler
 from TTS.tts.utils.helpers import (
     average_over_durations,
     generate_path,
@@ -2517,7 +2518,7 @@ class Vits(BaseTTS):
             batch["pitch"] = pitch_norm[: ,: , :batch["energy"].shape[-1]]
         return batch
 
-    def get_sampler(self, config: Coqpit, dataset: TTSDataset, num_gpus=1):
+    def get_sampler(self, config: Coqpit, dataset: TTSDataset, num_gpus=1, is_eval=False):
         weights = None
         data_items = dataset.samples
         if getattr(config, "use_weighted_sampler", False):
@@ -2531,16 +2532,25 @@ class Vits(BaseTTS):
                 weights = weights * alpha
                 print(f" > Attribute weights for '{attr_names}' \n | > {attr_weights}")
 
+        # input_audio_lenghts = [os.path.getsize(x["audio_file"]) for x in data_items]
+
         if weights is not None:
-            sampler = WeightedRandomSampler(weights, len(weights))
+            w_sampler = WeightedRandomSampler(weights, len(weights))
+            batch_sampler = BucketBatchSampler(
+                w_sampler,
+                data=data_items,
+                batch_size=config.eval_batch_size if is_eval else config.batch_size,
+                sort_key=lambda x: os.path.getsize(x["audio_file"]),
+                drop_last=True,
+            )
         else:
-            sampler = None
+            batch_sampler = None
         # sampler for DDP
-        if sampler is None:
-            sampler = DistributedSampler(dataset) if num_gpus > 1 else None
+        if batch_sampler is None:
+            batch_sampler = DistributedSampler(dataset) if num_gpus > 1 else None
         else:  # If a sampler is already defined use this sampler and DDP sampler together
-            sampler = DistributedSamplerWrapper(sampler) if num_gpus > 1 else sampler
-        return sampler
+            batch_sampler = DistributedSamplerWrapper(batch_sampler) if num_gpus > 1 else batch_sampler  # TODO: check batch_sampler with multi-gpu
+        return batch_sampler
 
     def get_data_loader(
         self,
@@ -2588,10 +2598,7 @@ class Vits(BaseTTS):
 
             loader = DataLoader(
                 dataset,
-                batch_size=config.eval_batch_size if is_eval else config.batch_size,
-                shuffle=False,  # shuffle is done in the dataset.
-                drop_last=False,  # setting this False might cause issues in AMP training.
-                sampler=sampler,
+                batch_sampler=sampler,
                 collate_fn=dataset.collate_fn,
                 num_workers=config.num_eval_loader_workers if is_eval else config.num_loader_workers,
                 pin_memory=False,
@@ -2652,7 +2659,7 @@ class Vits(BaseTTS):
         strict=True,
     ):  # pylint: disable=unused-argument, redefined-builtin
         """Load the model checkpoint and setup for training or inference"""
-        state = torch.load(checkpoint_path, map_location=torch.device("cpu"))
+        state = load_fsspec(checkpoint_path, map_location=torch.device("cpu"))
         # compat band-aid for the pre-trained models to not use the encoder baked into the model
         # TODO: consider baking the speaker encoder into the model and call it from there.
         # as it is probably easier for model distribution.
