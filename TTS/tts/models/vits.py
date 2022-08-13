@@ -980,7 +980,7 @@ class Vits(BaseTTS):
             self.args.kernel_size_text_encoder,
             self.args.dropout_p_text_encoder,
             language_emb_dim=self.embedded_language_dim,
-            emo_emb_dim=self.embedded_emotion_dim,
+            # emo_emb_dim=self.embedded_emotion_dim,
             padding_idx=self.tokenizer.characters.pad_id,
         )
 
@@ -1041,7 +1041,7 @@ class Vits(BaseTTS):
                 in_channels=self.args.hidden_channels,
                 cond_channels=context_cond_channels,
                 spk_emb_channels=self.embedded_speaker_dim,
-                emo_emb_channels=self.embedded_emotion_dim,
+                # emo_emb_channels=self.embedded_emotion_dim,
                 num_lstm_layers=1,
                 lstm_norm="spectral",
             )
@@ -1622,7 +1622,7 @@ class Vits(BaseTTS):
 
         ##### --> TEXT ENCODING
 
-        x_emb, o_en, m_p, logs_p, x_mask = self.text_encoder(x, x_lengths, lang_emb=lang_emb, emo_emb=emo_emb)
+        x_emb, o_en, m_p, logs_p, x_mask = self.text_encoder(x, x_lengths, lang_emb=lang_emb, emo_emb=None)
 
         ##### --> ALIGNER
         # x_emb_aligner = self.emb_aligner(x) * math.sqrt(self.args.hidden_channels)
@@ -1678,7 +1678,7 @@ class Vits(BaseTTS):
 
         # context encoder pass
         context_cond = torch.cat((o_energy_emb, o_pitch_emb), dim=1)  # [B, C * 2, T_de]
-        context_emb = self.context_encoder(o_en_ex, y_lengths, spk_emb=spk_emb, emo_emb=emo_emb, cond=context_cond)
+        context_emb = self.context_encoder(o_en_ex, y_lengths, spk_emb=spk_emb, emo_emb=None, cond=context_cond)
 
         ###### --> FLOW
 
@@ -1801,7 +1801,7 @@ class Vits(BaseTTS):
         if self.args.use_language_embedding and lid is not None:
             lang_emb = self.emb_l(lid).unsqueeze(-1)
 
-        _, o_en, m_p, logs_p, x_mask = self.text_encoder(x, x_lengths, lang_emb=lang_emb, emo_emb=emo_emb)
+        _, o_en, m_p, logs_p, x_mask = self.text_encoder(x, x_lengths, lang_emb=lang_emb, emo_emb=None)
 
         if self.args.use_sdp:
             dur_log = self.duration_predictor(
@@ -1867,7 +1867,7 @@ class Vits(BaseTTS):
 
         # context encoder pass
         context_cond = torch.cat((o_energy_emb, o_pitch_emb), dim=1)  # [B, C * 2, T_en]
-        o_context = self.context_encoder(o_en_ex, y_lengths, spk_emb=spk_emb, emo_emb=emo_emb, cond=context_cond)
+        o_context = self.context_encoder(o_en_ex, y_lengths, spk_emb=spk_emb, emo_emb=None, cond=context_cond)
 
         # if self.args.use_pitch:
         #     o_en = o_en + o_pitch_emb
